@@ -2,6 +2,7 @@ package com.netpulse.app
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -546,10 +548,16 @@ fun SignalScreen() {
             item {
                 Section {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        SignalBars(md.signalLevel, signalColor(md.signalLevel), Modifier.height(34.dp).width(40.dp))
+                        val lvl = barsFromDbm(md.signalDbm, md.signalLevel)
+                        SignalBars(lvl, signalColor(lvl), Modifier.height(34.dp).width(40.dp))
                         Spacer(Modifier.width(14.dp))
                         Column {
-                            Text(md.operator.ifEmpty { "No SIM / data" }, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            val name = when {
+                                md.operator.isNotEmpty() -> md.operator
+                                md.connected || md.simPresent -> "Mobile network"
+                                else -> "No SIM"
+                            }
+                            Text(name, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             Row {
                                 if (md.generation != "—") Pill(md.generation, Sky)
                                 Spacer(Modifier.width(6.dp))
@@ -561,12 +569,15 @@ fun SignalScreen() {
                 }
             }
             item {
+                val q = qualityFromDbm(md.signalDbm)
                 Section("Details") {
                     InfoRow("Operator", md.operator.ifEmpty { "—" })
+                    InfoRow("SIM", if (md.simPresent) "Active" else "Not detected")
                     InfoRow("Generation", md.generation)
                     InfoRow("Network type", md.networkType)
-                    InfoRow("Signal", if (md.signalDbm != 0) "${md.signalDbm} dBm" else "—", signalColor(md.signalLevel))
-                    InfoRow("Quality", qualityLabel(md.signalLevel), signalColor(md.signalLevel))
+                    InfoRow("Signal", if (md.signalDbm != 0) "${md.signalDbm} dBm" else "—", q.second)
+                    if (md.asu > 0) InfoRow("ASU", "${md.asu}")
+                    InfoRow("Quality", q.first, q.second)
                     InfoRow("Roaming", if (md.roaming) "Yes" else "No")
                     InfoRow("Connected via", if (md.connected) "Mobile data" else "Not active")
                 }
@@ -580,12 +591,24 @@ fun SignalScreen() {
     }
 }
 
-private fun qualityLabel(level: Int) = when (level) {
-    4 -> "Excellent"
-    3 -> "Good"
-    2 -> "Fair"
-    1 -> "Poor"
-    else -> "No signal"
+/** Signal bars 0..4 from dBm; falls back to the OS level when dBm is unknown. */
+private fun barsFromDbm(dbm: Int, osLevel: Int): Int = when {
+    dbm == 0 -> osLevel
+    dbm >= -85 -> 4
+    dbm >= -95 -> 3
+    dbm >= -105 -> 2
+    dbm >= -115 -> 1
+    else -> 0
+}
+
+/** Accurate quality from dBm (LTE/NR style thresholds), with a colour. */
+private fun qualityFromDbm(dbm: Int): Pair<String, Color> = when {
+    dbm == 0 -> "No signal" to Slate
+    dbm >= -85 -> "Excellent" to Emerald
+    dbm >= -95 -> "Good" to Sky
+    dbm >= -105 -> "Fair" to Amber
+    dbm >= -115 -> "Poor" to Rose
+    else -> "Very poor" to Rose
 }
 
 // ---------------- DATA ----------------
@@ -657,7 +680,25 @@ private fun AppUsageRow(a: AppUsage, maxTotal: Long) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(Modifier.padding(14.dp)) {
-            Row(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (a.icon != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = a.icon.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp).clip(RoundedCornerShape(7.dp))
+                    )
+                    Spacer(Modifier.width(10.dp))
+                } else {
+                    Box(
+                        Modifier.size(28.dp).clip(RoundedCornerShape(7.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(a.label.take(1).uppercase(), fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = Slate)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                }
                 Text(a.label, Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 15.sp, maxLines = 1)
                 Text(Fmt.bytes(a.total), fontWeight = FontWeight.SemiBold, color = Sky, fontSize = 14.sp)
             }

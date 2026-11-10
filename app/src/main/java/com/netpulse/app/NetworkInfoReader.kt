@@ -40,6 +40,8 @@ data class MobileDetails(
     val generation: String,
     val signalDbm: Int,
     val signalLevel: Int, // 0..4
+    val asu: Int,
+    val simPresent: Boolean,
     val roaming: Boolean,
 )
 
@@ -134,19 +136,28 @@ object NetworkInfoReader {
         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
         val onCell = caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
 
-        val operator = tm.networkOperatorName ?: ""
+        // Operator name is blank on many ROMs; fall back to the SIM operator.
+        val operator = listOf(
+            tm.networkOperatorName, tm.simOperatorName
+        ).firstOrNull { !it.isNullOrBlank() }?.trim() ?: ""
+        val simPresent = try { tm.simState == TelephonyManager.SIM_STATE_READY } catch (_: Throwable) { false }
+
         var dbm = 0
         var level = 0
+        var asu = 0
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
         ) {
             try {
                 val ss = tm.signalStrength
-                val list = ss?.cellSignalStrengths
-                val best: CellSignalStrength? = list?.firstOrNull()
+                // Pick the strongest valid cell (list may mix LTE + NR on a 5G phone).
+                val best: CellSignalStrength? = ss?.cellSignalStrengths
+                    ?.filter { it.dbm in -140..-30 }
+                    ?.maxByOrNull { it.dbm }
                 if (best != null) {
                     dbm = best.dbm
                     level = best.level
+                    asu = best.asuLevel
                 }
             } catch (_: Throwable) {
             }
@@ -165,6 +176,8 @@ object NetworkInfoReader {
             generation = type.second,
             signalDbm = dbm,
             signalLevel = level,
+            asu = asu,
+            simPresent = simPresent,
             roaming = tm.isNetworkRoaming,
         )
     }

@@ -14,6 +14,7 @@ data class AppUsage(
     val packageName: String,
     val rxBytes: Long,
     val txBytes: Long,
+    val icon: android.graphics.Bitmap? = null,
 ) {
     val total: Long get() = rxBytes + txBytes
 }
@@ -90,15 +91,54 @@ object DataUsageReader {
             }
         }
 
-        val installed = pm.getInstalledApplications(0).associateBy { it.uid }
-        return byUid.entries.mapNotNull { (uid, arr) ->
+        val sorted = byUid.entries.mapNotNull { (uid, arr) ->
             if (arr[0] + arr[1] <= 0) return@mapNotNull null
-            val label = when (uid) {
-                Process.SYSTEM_UID, 0 -> "Android System"
-                else -> installed[uid]?.let { pm.getApplicationLabel(it).toString() } ?: "UID $uid"
-            }
-            val pkg = installed[uid]?.packageName ?: ""
-            AppUsage(label, pkg, arr[0], arr[1])
+            resolveApp(pm, uid, arr[0], arr[1])
         }.sortedByDescending { it.total }
+        // Load icons only for the apps actually shown.
+        return sorted.mapIndexed { i, a ->
+            if (i < 30 && a.packageName.isNotEmpty() && a.icon == null) {
+                val ic = try { drawableToBitmap(pm.getApplicationIcon(a.packageName)) } catch (_: Exception) { null }
+                if (ic != null) a.copy(icon = ic) else a
+            } else a
+        }
+    }
+
+    private fun resolveApp(pm: PackageManager, uid: Int, rx: Long, tx: Long): AppUsage {
+        // Special shared UIDs first.
+        when (uid) {
+            0 -> return AppUsage("Root / kernel", "", rx, tx)
+            Process.SYSTEM_UID -> return AppUsage("Android System", "android", rx, tx)
+            1013 -> return AppUsage("Media server", "", rx, tx)
+            1020 -> return AppUsage("MulticastDNS", "", rx, tx)
+            1021 -> return AppUsage("GPS", "", rx, tx)
+            else -> {}
+        }
+        val pkgs = try { pm.getPackagesForUid(uid) } catch (_: Exception) { null }
+        if (pkgs.isNullOrEmpty()) {
+            // Fallback to any name the system exposes for this uid.
+            val nm = try { pm.getNameForUid(uid) } catch (_: Exception) { null }
+            return AppUsage(nm ?: "App (UID $uid)", nm ?: "", rx, tx)
+        }
+        // Prefer the package with a loadable label/icon.
+        for (pkg in pkgs) {
+            try {
+                val ai = pm.getApplicationInfo(pkg, 0)
+                val label = pm.getApplicationLabel(ai).toString()
+                return AppUsage(label, pkg, rx, tx)
+            } catch (_: Exception) {
+            }
+        }
+        return AppUsage(pkgs.first(), pkgs.first(), rx, tx)
+    }
+
+    private fun drawableToBitmap(d: android.graphics.drawable.Drawable): android.graphics.Bitmap {
+        if (d is android.graphics.drawable.BitmapDrawable && d.bitmap != null) return d.bitmap
+        val size = 96
+        val b = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(b)
+        d.setBounds(0, 0, size, size)
+        d.draw(c)
+        return b
     }
 }
