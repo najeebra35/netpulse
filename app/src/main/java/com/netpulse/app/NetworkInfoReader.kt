@@ -90,8 +90,8 @@ object NetworkInfoReader {
         var ssid = info.ssid?.trim('"') ?: ""
         if (ssid.isEmpty() || ssid == "<unknown ssid>") ssid = if (hasLoc) "(hidden)" else "(enable location to see)"
 
-        val tx = if (Build.VERSION.SDK_INT >= 30) info.txLinkSpeed else -1
-        val rx = if (Build.VERSION.SDK_INT >= 30) info.rxLinkSpeed else -1
+        val tx = info.txLinkSpeedMbps
+        val rx = info.rxLinkSpeedMbps
         val std = if (Build.VERSION.SDK_INT >= 30) wifiStd(info.wifiStandard) else ""
 
         val dhcp = wm.dhcpInfo

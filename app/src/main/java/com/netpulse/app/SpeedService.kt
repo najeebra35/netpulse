@@ -15,7 +15,6 @@ import android.graphics.Typeface
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,7 +69,11 @@ class SpeedService : Service() {
         val title = "↓ ${Fmt.rate(down)}   ↑ ${Fmt.rate(up)}"
         val text = "Session: ${Fmt.bytes(sessionTotal)} · tap to open"
 
-        return NotificationCompat.Builder(this, CHANNEL)
+        val stopAction = Notification.Action.Builder(
+            Icon.createWithBitmap(dotIcon()), "Stop", stop
+        ).build()
+
+        return Notification.Builder(this, CHANNEL)
             .setSmallIcon(Icon.createWithBitmap(speedIcon(down)))
             .setContentTitle(title)
             .setContentText(text)
@@ -78,10 +81,15 @@ class SpeedService : Service() {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setContentIntent(open)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .addAction(0, "Stop", stop)
+            .addAction(stopAction)
             .build()
+    }
+
+    private fun dotIcon(): Bitmap {
+        val b = Bitmap.createBitmap(24, 24, Bitmap.Config.ARGB_8888)
+        Canvas(b).drawColor(Color.TRANSPARENT)
+        return b
     }
 
     /** Draws the live download rate as the status-bar icon. */
