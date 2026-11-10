@@ -16,11 +16,21 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("netpulse.jks")
+            storePassword = "netpulse123"
+            keyAlias = "netpulse"
+            keyPassword = "netpulse123"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            signingConfig = signingConfigs.getByName("debug")
+            // Stable key so every CI build shares one signature and updates install cleanly.
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
