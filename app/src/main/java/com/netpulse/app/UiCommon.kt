@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -128,4 +129,58 @@ fun signalColor(level: Int): Color = when (level) {
     2 -> Amber
     1 -> Rose
     else -> Slate
+}
+
+/** 270° arc gauge with a centred value. */
+@Composable
+fun ArcGauge(
+    fraction: Float,
+    color: Color,
+    big: String,
+    unit: String,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val track = MaterialTheme.colorScheme.surfaceVariant
+    androidx.compose.foundation.layout.Box(modifier, contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
+            val stroke = 14.dp.toPx()
+            val inset = stroke / 2 + 2.dp.toPx()
+            val arcSize = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2)
+            val tl = androidx.compose.ui.geometry.Offset(inset, inset)
+            drawArc(track, 135f, 270f, false, tl, arcSize,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+            drawArc(color, 135f, 270f * fraction.coerceIn(0f, 1f), false, tl, arcSize,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(big, fontSize = 30.sp, fontWeight = FontWeight.Bold, color = color)
+            Text(unit, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(2.dp))
+            Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Compact KPI tile for the dashboard grid. */
+@Composable
+fun Kpi(label: String, value: String, unit: String, color: Color, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = color)
+                if (unit.isNotEmpty()) {
+                    Spacer(Modifier.width(3.dp))
+                    Text(unit, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 3.dp))
+                }
+            }
+        }
+    }
 }

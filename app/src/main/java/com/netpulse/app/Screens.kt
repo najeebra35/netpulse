@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -23,13 +25,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,14 +45,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -62,15 +64,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.ceil
 import kotlin.math.max
 
 private const val GRAPH_N = 120
 
-// ---------------- LIVE ----------------
+// ======================= DASHBOARD =======================
 
 @Composable
-fun LiveScreen() {
+fun DashboardScreen() {
     val context = LocalContext.current.applicationContext
     val owner = LocalLifecycleOwner.current
     val monitor = remember { SpeedMonitor() }
@@ -79,46 +80,82 @@ fun LiveScreen() {
     val upHist = remember { mutableStateListOf<Float>() }
     var transport by remember { mutableStateOf("—") }
     var notifOn by remember { mutableStateOf(false) }
+    var wifiRssi by remember { mutableIntStateOf(0) }
+    var mobileDbm by remember { mutableIntStateOf(0) }
+    var peakDown by remember { mutableFloatStateOf(0f) }
 
     val notifLauncher = rememberPermission { granted -> if (granted) { SpeedService.start(context); notifOn = true } }
 
-    LaunchedEffect(Unit) {
-        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            monitor.sample()
-            while (true) {
-                delay(1000)
-                val s = monitor.sample()
-                sample = s
-                transport = NetworkInfoReader.activeTransport(context)
-                downHist.add(s.downBps.toFloat()); if (downHist.size > GRAPH_N) downHist.removeAt(0)
-                upHist.add(s.upBps.toFloat()); if (upHist.size > GRAPH_N) upHist.removeAt(0)
+    LaunchedEffectLoop(owner) {
+        monitor.sample()
+        var tick = 0
+        while (true) {
+            delay(1000)
+            val s = monitor.sample()
+            sample = s
+            transport = NetworkInfoReader.activeTransport(context)
+            downHist.add(s.downBps.toFloat()); if (downHist.size > GRAPH_N) downHist.removeAt(0)
+            upHist.add(s.upBps.toFloat()); if (upHist.size > GRAPH_N) upHist.removeAt(0)
+            peakDown = max(peakDown, s.downBps * 8f / 1e6f)
+            if (tick % 3 == 0) {
+                val w = withContext(Dispatchers.IO) { NetworkInfoReader.wifi(context) }
+                wifiRssi = if (w.connected) w.rssi else 0
+                val m = withContext(Dispatchers.IO) { NetworkInfoReader.mobile(context) }
+                mobileDbm = m.signalDbm
             }
+            tick++
         }
     }
 
-    ScreenScaffold("📶 Live speed") {
+    val downMbps = sample.downBps * 8f / 1e6f
+    val upMbps = sample.upBps * 8f / 1e6f
+
+    ScreenScaffold("⚡ NetPulse") {
         item {
             Section {
-                Text(transport, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    BigSpeed("Download", sample.downBps, Sky, Modifier.weight(1f))
-                    Spacer(Modifier.width(12.dp))
-                    BigSpeed("Upload", sample.upBps, Emerald, Modifier.weight(1f))
+                Text(transport, color = Sky, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ArcGauge(
+                        fraction = (downMbps / gaugeMax(peakDown)).coerceIn(0f, 1f),
+                        color = Sky,
+                        big = fmtNum(sample.downBps),
+                        unit = "${fmtUnit(sample.downBps)} ↓",
+                        label = "Download",
+                        modifier = Modifier.weight(1f)
+                    )
+                    ArcGauge(
+                        fraction = (upMbps / gaugeMax(peakDown)).coerceIn(0f, 1f),
+                        color = Emerald,
+                        big = fmtNum(sample.upBps),
+                        unit = "${fmtUnit(sample.upBps)} ↑",
+                        label = "Upload",
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
         item {
-            Section("Last 2 minutes") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Kpi("Signal", if (wifiRssi != 0) "$wifiRssi" else if (mobileDbm != 0) "$mobileDbm" else "—",
+                    "dBm", if (wifiRssi != 0 || mobileDbm != 0) Emerald else Slate, Modifier.weight(1f))
+                Kpi("Session", Fmt.bytes(sample.totalRxBytes + sample.totalTxBytes).substringBefore(" "),
+                    Fmt.bytes(sample.totalRxBytes + sample.totalTxBytes).substringAfter(" "), Violet, Modifier.weight(1f))
+                Kpi("Peak ↓", "%.0f".format(peakDown), "Mbps", Amber, Modifier.weight(1f))
+            }
+        }
+        item {
+            Section("Live throughput") {
                 DualGraph(downHist.toList(), upHist.toList())
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    LegendDot(Sky, "Download"); LegendDot(Emerald, "Upload")
+                    LegendDot(Sky, "Download ${Fmt.rate(sample.downBps)}")
+                    LegendDot(Emerald, "Upload ${Fmt.rate(sample.upBps)}")
                 }
             }
         }
         item {
-            Section("This session") {
+            Section("Session traffic") {
                 InfoRow("Downloaded", Fmt.bytes(sample.totalRxBytes))
                 InfoRow("Uploaded", Fmt.bytes(sample.totalTxBytes))
                 InfoRow("Total", Fmt.bytes(sample.totalRxBytes + sample.totalTxBytes), Sky)
@@ -137,12 +174,9 @@ fun LiveScreen() {
                         onCheckedChange = { want ->
                             if (want) {
                                 val np = notifPerm()
-                                if (np.isEmpty() || hasPermission(context, np)) {
-                                    SpeedService.start(context); notifOn = true
-                                } else notifLauncher.launch(np)
-                            } else {
-                                SpeedService.stop(context); notifOn = false
-                            }
+                                if (np.isEmpty() || hasPermission(context, np)) { SpeedService.start(context); notifOn = true }
+                                else notifLauncher.launch(np)
+                            } else { SpeedService.stop(context); notifOn = false }
                         },
                         colors = SwitchDefaults.colors(checkedTrackColor = Sky)
                     )
@@ -152,36 +186,28 @@ fun LiveScreen() {
     }
 }
 
-@Composable
-private fun BigSpeed(label: String, bps: Long, color: Color, modifier: Modifier) {
-    Column(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (label == "Download") "↓" else "↑", color = color, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(4.dp))
-            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-        }
-        val bits = bps * 8.0
-        val num = when {
-            bits >= 1e6 -> "%.1f".format(bits / 1e6)
-            bits >= 1e3 -> "%.0f".format(bits / 1e3)
-            else -> "$bps"
-        }
-        val unit = when {
-            bits >= 1e6 -> "Mbps"
-            bits >= 1e3 -> "Kbps"
-            else -> "B/s"
-        }
-        Text(num, fontSize = 34.sp, fontWeight = FontWeight.Bold, color = color)
-        Text(unit, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun gaugeMax(peakMbps: Float): Float = max(peakMbps * 1.2f, 5f)
+private fun fmtNum(bps: Long): String {
+    val bits = bps * 8.0
+    return when {
+        bits >= 1e6 -> "%.1f".format(bits / 1e6)
+        bits >= 1e3 -> "%.0f".format(bits / 1e3)
+        else -> "$bps"
+    }
+}
+private fun fmtUnit(bps: Long): String {
+    val bits = bps * 8.0
+    return when {
+        bits >= 1e6 -> "Mbps"
+        bits >= 1e3 -> "Kbps"
+        else -> "B/s"
     }
 }
 
 @Composable
 private fun LegendDot(color: Color, label: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(10.dp).clip(RoundedCornerShape(50)).let { it }) {
-            Canvas(Modifier.size(10.dp)) { drawCircle(color) }
-        }
+        Canvas(Modifier.size(10.dp)) { drawCircle(color) }
         Spacer(Modifier.width(6.dp))
         Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -219,11 +245,55 @@ private fun DualGraph(down: List<Float>, up: List<Float>) {
     }
 }
 
-// ---------------- SPEED TEST ----------------
+// ======================= TOOLS (speed / ping / trace) =======================
 
 @Composable
-fun SpeedTestScreen() {
-    val scope = rememberCoroutineScope()
+fun ToolsScreen() {
+    var seg by remember { mutableIntStateOf(0) }
+    val labels = listOf("Speed", "Ping", "Trace")
+    ScreenScaffold("🛠 Tools") {
+        item {
+            Segmented(labels, seg) { seg = it }
+        }
+        when (seg) {
+            0 -> speedTestItems(this)
+            1 -> pingItems(this)
+            else -> traceItems(this)
+        }
+    }
+}
+
+@Composable
+private fun Segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surface).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        labels.forEachIndexed { i, l ->
+            val on = i == selected
+            Box(
+                Modifier.weight(1f).clip(RoundedCornerShape(11.dp))
+                    .background(if (on) Sky else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(l, color = if (on) Color(0xFF07131F) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+// ---- Speed test ----
+private fun speedTestItems(scope: androidx.compose.foundation.lazy.LazyListScope) {
+    scope.item { SpeedTestPane() }
+}
+
+@Composable
+private fun SpeedTestPane() {
+    val cs = rememberCoroutineScope()
     val tester = remember { SpeedTest() }
     var running by remember { mutableStateOf(false) }
     var phase by remember { mutableStateOf("") }
@@ -235,77 +305,184 @@ fun SpeedTestScreen() {
     var liveUp by remember { mutableFloatStateOf(0f) }
     var job by remember { mutableStateOf<Job?>(null) }
 
-    ScreenScaffold("🚀 Speed test") {
-        item {
-            Section {
-                Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        val showLive = running && (phase == "DOWNLOAD" || phase == "UPLOAD")
-                        val big = when {
-                            phase == "DOWNLOAD" -> liveDown
-                            phase == "UPLOAD" -> liveUp
-                            else -> max(download, 0f)
-                        }
-                        if (running && phase == "PING") {
-                            CircularProgressIndicator(color = Sky)
-                            Spacer(Modifier.height(8.dp))
-                            Text("Testing ping…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        } else {
-                            Text("%.1f".format(if (showLive || download > 0) big else 0f),
-                                fontSize = 56.sp, fontWeight = FontWeight.Bold, color = Sky)
-                            Text(if (phase == "UPLOAD") "Mbps · upload" else "Mbps · download",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Section {
+            Box(Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    val big = when (phase) { "DOWNLOAD" -> liveDown; "UPLOAD" -> liveUp; else -> download }
+                    if (running && phase == "PING") {
+                        CircularProgressIndicator(color = Sky)
+                        Spacer(Modifier.height(8.dp)); Text("Testing ping…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Text("%.1f".format(big), fontSize = 54.sp, fontWeight = FontWeight.Bold, color = Sky)
+                        Text(if (phase == "UPLOAD") "Mbps · upload" else "Mbps · download",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
-        item {
+        Section {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatBox("Ping", if (ping > 0) "%.0f".format(ping) else "—", "ms", Amber, Modifier.weight(1f))
+                StatBox("Jitter", if (jitter > 0) "%.0f".format(jitter) else "—", "ms", Violet, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatBox("Download", if (download > 0) "%.1f".format(download) else "—", "Mbps", Sky, Modifier.weight(1f))
+                StatBox("Upload", if (upload > 0) "%.1f".format(upload) else "—", "Mbps", Emerald, Modifier.weight(1f))
+            }
+        }
+        Button(
+            onClick = {
+                if (running) { job?.cancel(); running = false; phase = ""; return@Button }
+                running = true; ping = 0f; jitter = 0f; download = 0f; upload = 0f; liveDown = 0f; liveUp = 0f
+                job = cs.launch {
+                    phase = "PING"
+                    val p = tester.ping { ping = it.toFloat() }
+                    ping = p.first.toFloat(); jitter = p.second.toFloat()
+                    phase = "DOWNLOAD"; download = tester.download { liveDown = it.toFloat() }.toFloat()
+                    phase = "UPLOAD"; upload = tester.upload { liveUp = it.toFloat() }.toFloat()
+                    phase = "DONE"; running = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (running) Rose else Sky)
+        ) { Text(if (running) "Stop" else "Start test", fontWeight = FontWeight.Bold, fontSize = 16.sp) }
+    }
+}
+
+// ---- Ping ----
+private fun pingItems(scope: androidx.compose.foundation.lazy.LazyListScope) {
+    scope.item { PingPane() }
+}
+
+@Composable
+private fun PingPane() {
+    val cs = rememberCoroutineScope()
+    var host by remember { mutableStateOf("google.com") }
+    var running by remember { mutableStateOf(false) }
+    val replies = remember { mutableStateListOf<PingReply>() }
+    var summary by remember { mutableStateOf<PingSummary?>(null) }
+    var job by remember { mutableStateOf<Job?>(null) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        HostField(host, { host = it }, "Host or IP (e.g. google.com)")
+        Button(
+            onClick = {
+                if (running) { job?.cancel(); running = false; return@Button }
+                running = true; replies.clear(); summary = null
+                job = cs.launch {
+                    val s = NetTools.ping(host.trim(), 10) { replies.add(it) }
+                    summary = s; running = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (running) Rose else Sky)
+        ) { Text(if (running) "Stop" else "Ping", fontWeight = FontWeight.Bold) }
+
+        summary?.let { s ->
             Section {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatBox("Ping", if (ping > 0) "%.0f".format(ping) else "—", "ms", Amber, Modifier.weight(1f))
-                    StatBox("Jitter", if (jitter > 0) "%.0f".format(jitter) else "—", "ms", Violet, Modifier.weight(1f))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Kpi("Avg", "%.0f".format(s.avgMs), "ms", Sky, Modifier.weight(1f))
+                    Kpi("Min", "%.0f".format(s.minMs), "ms", Emerald, Modifier.weight(1f))
+                    Kpi("Max", "%.0f".format(s.maxMs), "ms", Amber, Modifier.weight(1f))
+                    Kpi("Loss", "${s.lossPct}", "%", if (s.lossPct == 0) Emerald else Rose, Modifier.weight(1f))
                 }
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatBox("Download", if (download > 0) "%.1f".format(download) else "—", "Mbps", Sky, Modifier.weight(1f))
-                    StatBox("Upload", if (upload > 0) "%.1f".format(upload) else "—", "Mbps", Emerald, Modifier.weight(1f))
+                if (s.ip.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp)); InfoRow("Resolved IP", s.ip, mono = true)
                 }
             }
         }
-        item {
-            Button(
-                onClick = {
-                    if (running) { job?.cancel(); running = false; phase = ""; return@Button }
-                    running = true; ping = 0f; jitter = 0f; download = 0f; upload = 0f
-                    liveDown = 0f; liveUp = 0f
-                    job = scope.launch {
-                        phase = "PING"
-                        val p = tester.ping { ping = it.toFloat() }
-                        ping = p.first.toFloat(); jitter = p.second.toFloat()
-                        phase = "DOWNLOAD"
-                        download = tester.download { liveDown = it.toFloat() }.toFloat()
-                        phase = "UPLOAD"
-                        upload = tester.upload { liveUp = it.toFloat() }.toFloat()
-                        phase = "DONE"; running = false
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = if (running) Rose else Sky)
-            ) {
-                Text(if (running) "Stop" else "Start test", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        if (replies.isNotEmpty()) {
+            Section("Replies") {
+                replies.takeLast(12).forEach { r ->
+                    Text(
+                        if (r.timeMs != null) "seq ${r.seq}: ${"%.1f".format(r.timeMs)} ms" +
+                            (r.ttl?.let { "  ttl=$it" } ?: "")
+                        else "seq ${r.seq}: timeout",
+                        fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                        color = if (r.timeMs != null) MaterialTheme.colorScheme.onSurface else Rose,
+                        modifier = Modifier.padding(vertical = 1.dp)
+                    )
+                }
             }
-        }
-        item {
-            Text("Cloudflare (speed.cloudflare.com) server vachi test pannudhu. " +
-                "WiFi-la actual router/broadband speed-ah kaattum.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
-// ---------------- WIFI ----------------
+// ---- Traceroute ----
+private fun traceItems(scope: androidx.compose.foundation.lazy.LazyListScope) {
+    scope.item { TracePane() }
+}
+
+@Composable
+private fun TracePane() {
+    val cs = rememberCoroutineScope()
+    var host by remember { mutableStateOf("google.com") }
+    var running by remember { mutableStateOf(false) }
+    val hops = remember { mutableStateListOf<Hop>() }
+    var job by remember { mutableStateOf<Job?>(null) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        HostField(host, { host = it }, "Host or IP to trace")
+        Button(
+            onClick = {
+                if (running) { job?.cancel(); running = false; return@Button }
+                running = true; hops.clear()
+                job = cs.launch {
+                    NetTools.traceroute(host.trim(), 20) { hops.add(it) }
+                    running = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = if (running) Rose else Sky)
+        ) {
+            if (running) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                Spacer(Modifier.width(8.dp)) }
+            Text(if (running) "Tracing…" else "Traceroute", fontWeight = FontWeight.Bold)
+        }
+        if (hops.isNotEmpty()) {
+            Section("Hops") {
+                hops.forEach { h ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text("${h.ttl}".padStart(2), fontFamily = FontFamily.Monospace,
+                            color = Sky, fontSize = 13.sp, modifier = Modifier.width(26.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(h.ip, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                                color = if (h.reached) Emerald else MaterialTheme.colorScheme.onSurface)
+                            if (h.host.isNotEmpty()) Text(h.host, fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(h.timeMs?.let { "${"%.0f".format(it)} ms" } ?: "*",
+                            fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        Text("Traceroute system ping (TTL) vachi velai seyyum. Sila phones/networks idha block pannum — " +
+            "appo hops '*' aah varum.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun HostField(value: String, onChange: (String) -> Unit, hint: String) {
+    OutlinedTextField(
+        value = value, onValueChange = onChange,
+        label = { Text(hint) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        modifier = Modifier.fillMaxWidth(),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Sky, cursorColor = Sky,
+            focusedLabelColor = Sky,
+        )
+    )
+}
+
+// ======================= WIFI =======================
 
 @Composable
 fun WifiScreen() {
@@ -316,13 +493,11 @@ fun WifiScreen() {
     var hasLoc by remember { mutableStateOf(hasPermission(context, locationPerm())) }
     val locLauncher = rememberPermission { hasLoc = it }
 
-    LaunchedEffect(Unit) {
-        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            launch(Dispatchers.IO) { pub = NetworkInfoReader.publicNet() }
-            while (true) {
-                w = withContext(Dispatchers.IO) { NetworkInfoReader.wifi(context) }
-                delay(2000)
-            }
+    LaunchedEffectLoop(owner) {
+        launch(Dispatchers.IO) { pub = NetworkInfoReader.publicNet() }
+        while (true) {
+            w = withContext(Dispatchers.IO) { NetworkInfoReader.wifi(context) }
+            delay(1200)
         }
     }
 
@@ -334,30 +509,32 @@ fun WifiScreen() {
                         fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(10.dp))
                     Button(onClick = { locLauncher.launch(locationPerm()) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Sky)) {
-                        Text("Allow location")
-                    }
+                        colors = ButtonDefaults.buttonColors(containerColor = Sky)) { Text("Allow location") }
                 }
             }
         }
         val wd = w
         if (wd == null || !wd.connected) {
-            item {
-                Section { Text("Wi-Fi connect aagala. Mobile data-la iruntha idhu kaaliya irukkum.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
+            item { Section { Text("Wi-Fi connect aagala. Mobile data-la iruntha idhu kaaliya irukkum.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         } else {
             item {
                 Section {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SignalBars(wd.signalLevel, signalColor(wd.signalLevel), Modifier.height(34.dp).width(40.dp))
-                        Spacer(Modifier.width(14.dp))
-                        Column {
-                            Text(wd.ssid, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                            Text("${wd.rssi} dBm · ${wd.band} · Ch ${wd.channel}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                        }
+                    // Live signal meter
+                    val frac = ((wd.rssi + 100).coerceIn(0, 60)) / 60f
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        ArcGauge(frac, signalColor(wd.signalLevel), "${wd.rssi}", "dBm", wd.ssid,
+                            Modifier.fillMaxWidth(0.62f))
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Kpi("Band", wd.band.substringBefore(" "), "GHz", Sky, Modifier.weight(1f))
+                        Kpi("Channel", "${wd.channel}", "", Violet, Modifier.weight(1f))
+                        Kpi("Link", "${wd.linkSpeedMbps}", "Mbps", Emerald, Modifier.weight(1f))
+                    }
+                    Text("Veetla nadandhu parunga — meter periya number (0 pakkam) na signal strong.",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp))
                 }
             }
             item {
@@ -366,7 +543,6 @@ fun WifiScreen() {
                     if (wd.txLinkSpeed >= 0) InfoRow("Tx / Rx link", "${wd.txLinkSpeed} / ${wd.rxLinkSpeed} Mbps")
                     if (wd.standard.isNotEmpty()) InfoRow("Wi-Fi standard", wd.standard)
                     InfoRow("Frequency", "${wd.frequencyMhz} MHz (${wd.band})")
-                    InfoRow("Channel", "${wd.channel}")
                     InfoRow("Signal", "${wd.rssi} dBm", signalColor(wd.signalLevel))
                 }
             }
@@ -385,8 +561,7 @@ fun WifiScreen() {
                 if (p == null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Sky)
-                        Spacer(Modifier.width(10.dp)); Text("Fetching…",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(10.dp)); Text("Fetching…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
                     InfoRow("Public IP", p.ip, mono = true)
@@ -398,12 +573,12 @@ fun WifiScreen() {
     }
 }
 
-// ---------------- DEVICES ----------------
+// ======================= DEVICES =======================
 
 @Composable
 fun DevicesScreen() {
     val context = LocalContext.current.applicationContext
-    val scope = rememberCoroutineScope()
+    val cs = rememberCoroutineScope()
     val scanner = remember { LanScanner(context) }
     var scanning by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -414,10 +589,9 @@ fun DevicesScreen() {
 
     fun startScan() {
         scanning = true; done = false; progress = 0f; devices.clear()
-        scope.launch {
+        cs.launch {
             val result = scanner.scan { d, t -> progress = d.toFloat() / t }
-            devices.clear(); devices.addAll(result)
-            scanning = false; done = true
+            devices.clear(); devices.addAll(result); scanning = false; done = true
         }
     }
 
@@ -425,7 +599,7 @@ fun DevicesScreen() {
         if (!hasLoc) {
             item {
                 Section {
-                    Text("Device peyar/details sariya kaatta location permission thevai.",
+                    Text("Device details sariya kaatta location permission thevai.",
                         fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(10.dp))
                     Button(onClick = { locLauncher.launch(locationPerm()) },
@@ -435,36 +609,28 @@ fun DevicesScreen() {
         }
         item {
             Button(
-                onClick = { if (!scanning) startScan() },
-                enabled = !scanning,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
+                onClick = { if (!scanning) startScan() }, enabled = !scanning,
+                modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Sky)
             ) {
                 if (scanning) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Scanning… ${(progress * 100).toInt()}%", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(10.dp)); Text("Scanning… ${(progress * 100).toInt()}%", fontWeight = FontWeight.Bold)
                 } else Text(if (done) "Scan again" else "Scan network", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
         }
-        if (scanning) {
-            item { LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Sky) }
-        }
-        if (done || devices.isNotEmpty()) {
-            item {
-                Text("${devices.size} device${if (devices.size == 1) "" else "s"} found",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-            }
+        if (scanning) item { LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Sky) }
+        if (done || devices.isNotEmpty()) item {
+            Text("${devices.size} device${if (devices.size == 1) "" else "s"} found",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
         items(devices) { d -> DeviceCard(d) }
-        if (done && devices.isEmpty()) {
-            item { Section { Text("Edhuvum kidaikala. WiFi-la connect aagirukeengala-nu check pannunga.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+        if (done && devices.isEmpty()) item {
+            Section { Text("Edhuvum kidaikala. WiFi-la connect aagirukeengala-nu check pannunga.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         item {
-            Text("Ella IP-um unga sondha WiFi network-la irukkura device thaan (router admin page kaatradhe maari). " +
-                "Android 10+ la sila phones MAC address-ah hide pannum.",
+            Text("Ella IP-um unga sondha WiFi-la irukkura device thaan. Card-ah tap panna open ports scan pannalaam.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -472,13 +638,19 @@ fun DevicesScreen() {
 
 @Composable
 private fun DeviceCard(d: LanDevice) {
+    val cs = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+    var progress by remember { mutableFloatStateOf(0f) }
+    var ports by remember { mutableStateOf<List<OpenPort>?>(null) }
+
     val tag = when {
         d.isSelf -> "This device" to Emerald
         d.isGateway -> "Router" to Amber
         else -> null
     }
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.animateContentSize(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -504,11 +676,48 @@ private fun DeviceCard(d: LanDevice) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (d.reachableMs > 0) Text("Ping: ${d.reachableMs} ms", fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            if (expanded) {
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = {
+                        if (scanning) return@Button
+                        scanning = true; progress = 0f; ports = null
+                        cs.launch {
+                            val res = NetTools.scanPorts(d.ip) { c, t -> progress = c.toFloat() / t }
+                            ports = res; scanning = false
+                        }
+                    },
+                    enabled = !scanning,
+                    modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    if (scanning) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Sky)
+                        Spacer(Modifier.width(8.dp)); Text("Scanning ports ${(progress * 100).toInt()}%", color = Sky)
+                    } else Text("Scan open ports", color = Sky, fontWeight = FontWeight.SemiBold)
+                }
+                ports?.let { list ->
+                    Spacer(Modifier.height(8.dp))
+                    if (list.isEmpty()) {
+                        Text("No common open ports found (device firewall / closed).",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        list.forEach { p ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                                Text("${p.port}", fontFamily = FontFamily.Monospace, color = Emerald,
+                                    fontSize = 13.sp, modifier = Modifier.width(60.dp))
+                                Text(p.service, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-// ---------------- SIGNAL ----------------
+// ======================= SIGNAL =======================
 
 @Composable
 fun SignalScreen() {
@@ -522,12 +731,10 @@ fun SignalScreen() {
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { res -> hasPerms = res.values.all { it } }
 
-    LaunchedEffect(hasPerms) {
-        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (true) {
-                m = withContext(Dispatchers.IO) { NetworkInfoReader.mobile(context) }
-                delay(2000)
-            }
+    LaunchedEffectLoop(owner, hasPerms) {
+        while (true) {
+            m = withContext(Dispatchers.IO) { NetworkInfoReader.mobile(context) }
+            delay(1500)
         }
     }
 
@@ -546,25 +753,21 @@ fun SignalScreen() {
         val md = m
         if (md != null) {
             item {
+                val q = qualityFromDbm(md.signalDbm)
+                val lvl = barsFromDbm(md.signalDbm, md.signalLevel)
                 Section {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val lvl = barsFromDbm(md.signalDbm, md.signalLevel)
-                        SignalBars(lvl, signalColor(lvl), Modifier.height(34.dp).width(40.dp))
-                        Spacer(Modifier.width(14.dp))
-                        Column {
-                            val name = when {
-                                md.operator.isNotEmpty() -> md.operator
-                                md.connected || md.simPresent -> "Mobile network"
-                                else -> "No SIM"
-                            }
-                            Text(name, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Row {
-                                if (md.generation != "—") Pill(md.generation, Sky)
-                                Spacer(Modifier.width(6.dp))
-                                if (md.signalDbm != 0) Text("${md.signalDbm} dBm",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                            }
-                        }
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        val frac = ((md.signalDbm + 120).coerceIn(0, 80)) / 80f
+                        ArcGauge(if (md.signalDbm != 0) frac else 0f, q.second,
+                            if (md.signalDbm != 0) "${md.signalDbm}" else "—", "dBm",
+                            md.operator.ifEmpty { if (md.simPresent) "Mobile network" else "No SIM" },
+                            Modifier.fillMaxWidth(0.62f))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Kpi("Type", md.generation, "", Sky, Modifier.weight(1f))
+                        Kpi("Quality", q.first, "", q.second, Modifier.weight(1f))
+                        if (md.asu > 0) Kpi("ASU", "${md.asu}", "", Violet, Modifier.weight(1f))
                     }
                 }
             }
@@ -582,16 +785,10 @@ fun SignalScreen() {
                     InfoRow("Connected via", if (md.connected) "Mobile data" else "Not active")
                 }
             }
-            item {
-                Text("dBm 0 pakkam: romba nalla signal. -110 dBm maari: romba weak. " +
-                    "Veetla poga poga endha room-la signal nalla-nu ingaye paarkalaam.",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
     }
 }
 
-/** Signal bars 0..4 from dBm; falls back to the OS level when dBm is unknown. */
 private fun barsFromDbm(dbm: Int, osLevel: Int): Int = when {
     dbm == 0 -> osLevel
     dbm >= -85 -> 4
@@ -601,7 +798,6 @@ private fun barsFromDbm(dbm: Int, osLevel: Int): Int = when {
     else -> 0
 }
 
-/** Accurate quality from dBm (LTE/NR style thresholds), with a colour. */
 private fun qualityFromDbm(dbm: Int): Pair<String, Color> = when {
     dbm == 0 -> "No signal" to Slate
     dbm >= -85 -> "Excellent" to Emerald
@@ -611,7 +807,7 @@ private fun qualityFromDbm(dbm: Int): Pair<String, Color> = when {
     else -> "Very poor" to Rose
 }
 
-// ---------------- DATA ----------------
+// ======================= DATA =======================
 
 @Composable
 fun DataScreen() {
@@ -621,7 +817,7 @@ fun DataScreen() {
     var hasAccess by remember { mutableStateOf(DataUsageReader.hasUsageAccess(context)) }
     val owner = LocalLifecycleOwner.current
 
-    LaunchedEffect(Unit) {
+    androidx.compose.runtime.LaunchedEffect(Unit) {
         owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             hasAccess = DataUsageReader.hasUsageAccess(context)
             totals = withContext(Dispatchers.IO) { runCatching { DataUsageReader.totals(context) }.getOrNull() }
@@ -631,14 +827,12 @@ fun DataScreen() {
 
     ScreenScaffold("📊 Data usage (this month)") {
         item {
-            Section {
-                val t = totals
-                val wifi = (t?.wifiRx ?: 0) + (t?.wifiTx ?: 0)
-                val mob = (t?.mobileRx ?: 0) + (t?.mobileTx ?: 0)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatBox("Wi-Fi", Fmt.bytes(wifi), "down+up", Sky, Modifier.weight(1f))
-                    StatBox("Mobile", Fmt.bytes(mob), "down+up", Emerald, Modifier.weight(1f))
-                }
+            val t = totals
+            val wifi = (t?.wifiRx ?: 0) + (t?.wifiTx ?: 0)
+            val mob = (t?.mobileRx ?: 0) + (t?.mobileTx ?: 0)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatBox("Wi-Fi", Fmt.bytes(wifi), "down+up", Sky, Modifier.weight(1f))
+                StatBox("Mobile", Fmt.bytes(mob), "down+up", Emerald, Modifier.weight(1f))
             }
         }
         if (!hasAccess) {
@@ -648,26 +842,20 @@ fun DataScreen() {
                         fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(10.dp))
                     Button(onClick = { openUsageAccessSettings(context) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Sky)) {
-                        Text("Open settings")
-                    }
+                        colors = ButtonDefaults.buttonColors(containerColor = Sky)) { Text("Open settings") }
                     Spacer(Modifier.height(6.dp))
                     Text("Settings-la NetPulse-ah thedi ON pannunga, appuram indha tab-ku thirumba vaanga.",
                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         } else {
-            item {
-                Text("Top apps", fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
-                    modifier = Modifier.padding(top = 4.dp))
-            }
+            item { Text("Top apps", fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                modifier = Modifier.padding(top = 4.dp)) }
             val top = apps.take(25)
             val maxTotal = top.maxOfOrNull { it.total } ?: 1L
             items(top) { a -> AppUsageRow(a, maxTotal) }
-            if (apps.isEmpty()) {
-                item { Section { Text("Data illa, illa innum calculate aagala.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-            }
+            if (apps.isEmpty()) item { Section { Text("Data illa, illa innum calculate aagala.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         }
     }
 }
@@ -683,19 +871,14 @@ private fun AppUsageRow(a: AppUsage, maxTotal: Long) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (a.icon != null) {
                     androidx.compose.foundation.Image(
-                        bitmap = a.icon.asImageBitmap(),
-                        contentDescription = null,
+                        bitmap = a.icon.asImageBitmap(), contentDescription = null,
                         modifier = Modifier.size(28.dp).clip(RoundedCornerShape(7.dp))
                     )
                     Spacer(Modifier.width(10.dp))
                 } else {
-                    Box(
-                        Modifier.size(28.dp).clip(RoundedCornerShape(7.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(a.label.take(1).uppercase(), fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            color = Slate)
+                    Box(Modifier.size(28.dp).clip(RoundedCornerShape(7.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                        Text(a.label.take(1).uppercase(), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Slate)
                     }
                     Spacer(Modifier.width(10.dp))
                 }
@@ -712,5 +895,19 @@ private fun AppUsageRow(a: AppUsage, maxTotal: Long) {
             Text("↓ ${Fmt.bytes(a.rxBytes)}   ↑ ${Fmt.bytes(a.txBytes)}",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+// ======================= shared =======================
+
+/** repeatOnLifecycle STARTED loop helper to cut boilerplate. */
+@Composable
+fun LaunchedEffectLoop(
+    owner: androidx.lifecycle.LifecycleOwner,
+    key: Any? = Unit,
+    block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit,
+) {
+    androidx.compose.runtime.LaunchedEffect(key) {
+        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { block() }
     }
 }

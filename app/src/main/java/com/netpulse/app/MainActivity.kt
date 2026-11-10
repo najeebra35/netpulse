@@ -25,7 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.SpaceDashboard
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.SignalCellularAlt
@@ -61,8 +61,8 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Tab(val label: String, val icon: ImageVector) {
-    LIVE("Live", Icons.Filled.NetworkCheck),
-    TEST("Test", Icons.Filled.Speed),
+    DASH("Home", Icons.Filled.SpaceDashboard),
+    TOOLS("Tools", Icons.Filled.Speed),
     WIFI("Wi-Fi", Icons.Filled.Wifi),
     DEVICES("Devices", Icons.Filled.Dns),
     SIGNAL("Signal", Icons.Filled.SignalCellularAlt),
@@ -98,8 +98,8 @@ private fun RootScreen() {
     ) { pad ->
         Box(Modifier.fillMaxSize().padding(pad)) {
             when (tabs[tab]) {
-                Tab.LIVE -> LiveScreen()
-                Tab.TEST -> SpeedTestScreen()
+                Tab.DASH -> DashboardScreen()
+                Tab.TOOLS -> ToolsScreen()
                 Tab.WIFI -> WifiScreen()
                 Tab.DEVICES -> DevicesScreen()
                 Tab.SIGNAL -> SignalScreen()
